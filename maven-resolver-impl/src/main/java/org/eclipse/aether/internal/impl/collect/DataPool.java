@@ -181,6 +181,11 @@ final class DataPool
         nodes.put( key, children );
     }
 
+    public Map<Object, List<DependencyNode>> getNodes()
+    {
+        return nodes;
+    }
+
     abstract static class Descriptor
     {
 
@@ -358,7 +363,7 @@ final class DataPool
         }
     }
 
-    static final class GraphKey
+    public static final class GraphKey
     {
         private final Artifact artifact;
 
@@ -408,6 +413,11 @@ final class DataPool
         public int hashCode()
         {
             return hashCode;
+        }
+
+        public DependencySelector getSelector()
+        {
+            return selector;
         }
     }
 }

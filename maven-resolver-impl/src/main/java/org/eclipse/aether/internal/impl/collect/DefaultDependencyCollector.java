@@ -19,15 +19,21 @@ package org.eclipse.aether.internal.impl.collect;
  * under the License.
  */
 
+import static java.util.Objects.requireNonNull;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import static java.util.Objects.requireNonNull;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -67,6 +73,8 @@ import org.eclipse.aether.spi.locator.Service;
 import org.eclipse.aether.spi.locator.ServiceLocator;
 import org.eclipse.aether.util.ConfigUtils;
 import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
+import org.eclipse.aether.util.graph.selector.AndDependencySelector;
+import org.eclipse.aether.util.graph.selector.ExclusionDependencySelector;
 import org.eclipse.aether.util.graph.transformer.TransformationContextKeys;
 import org.eclipse.aether.version.Version;
 import org.slf4j.Logger;
@@ -86,6 +94,13 @@ public class DefaultDependencyCollector
     private static final String CONFIG_PROP_MAX_CYCLES = "aether.dependencyCollector.maxCycles";
 
     private static final int CONFIG_PROP_MAX_CYCLES_DEFAULT = 10;
+
+    private static final String CONFIG_PROP_ANALYZE_EXCLUSION = "aether.dependencyCollector.analyzeExclusion";
+
+    private static final String CONFIG_PROP_NODES_WARNING_SIZE =
+            "aether.dependencyCollector.dependencyNodesWarningSize";
+
+    private static final int DEPENDENCY_NODES_WARNING_SIZE = 500;
 
     private static final Logger LOGGER = LoggerFactory.getLogger( DefaultDependencyCollector.class );
 
@@ -258,6 +273,22 @@ public class DefaultDependencyCollector
                      verFilter != null ? verFilter.deriveChildFilter( context ) : null );
 
             errorPath = results.errorPath;
+
+            Map<Object, List<DependencyNode>> dependencyNodes = pool.getNodes();
+            int warningSize =
+                    ConfigUtils.getInteger( session, DEPENDENCY_NODES_WARNING_SIZE, CONFIG_PROP_NODES_WARNING_SIZE );
+            if ( dependencyNodes.size() > warningSize )
+            {
+                LOGGER.error( "DataPool nodes of [artifact: {}, root {}] ====>>> size {}, cost {}ms",
+                        request.getRootArtifact(), request.getRoot(), dependencyNodes.size(),
+                        TimeUnit.NANOSECONDS.toMillis( System.nanoTime() - time1 ) );
+                boolean analyzeNodes = ConfigUtils.getBoolean( session, false,
+                        CONFIG_PROP_ANALYZE_EXCLUSION );
+                if ( analyzeNodes )
+                {
+                    analysisAndReportDependenciesNodes( dependencyNodes );
+                }
+            }
         }
 
         long time2 = System.nanoTime();
@@ -296,6 +327,81 @@ public class DefaultDependencyCollector
         }
 
         return result;
+    }
+
+    private void analysisAndReportDependenciesNodes( Map<Object, List<DependencyNode>> nodes )
+    {
+
+        Map<Class, AtomicInteger> keyInstanceCount = new HashMap<>();
+        Map<Class, AtomicInteger> dependencySelectorCount = new HashMap<>();
+        Map<Exclusion, AtomicInteger> countByExclusion = new HashMap<>();
+
+        for ( Object key : nodes.keySet() )
+        {
+            addCount( keyInstanceCount, key.getClass() );
+
+            if ( key instanceof DataPool.GraphKey )
+            {
+                DataPool.GraphKey graphKey = ( DataPool.GraphKey ) key;
+                DependencySelector selector = graphKey.getSelector();
+                addCount( dependencySelectorCount, selector.getClass() );
+                analysisSelector( selector, countByExclusion );
+            }
+        }
+        LOGGER.warn( "keyInstanceCount: {}", keyInstanceCount );
+        LOGGER.warn( "dependencySelectorCount: {}", dependencySelectorCount );
+        LOGGER.warn( "countByExclusion: {}", prettyPrintMapOrderByCount( countByExclusion ) );
+    }
+
+    private void analysisSelector( DependencySelector selector, Map<Exclusion, AtomicInteger> countByExclusion )
+    {
+        if ( selector instanceof AndDependencySelector )
+        {
+            Set<? extends DependencySelector> childSelectors =
+                    ( ( AndDependencySelector ) selector ).getSelectors();
+            for ( DependencySelector childSelector : childSelectors )
+            {
+                if ( childSelector instanceof ExclusionDependencySelector )
+                {
+                    for ( Exclusion exclusion : ( ( ExclusionDependencySelector ) childSelector ).getExclusions() )
+                    {
+                        addCount( countByExclusion, exclusion );
+                    }
+                }
+            }
+        }
+    }
+
+    private <K> void addCount( Map<K, AtomicInteger> map, K key )
+    {
+        AtomicInteger count = map.get( key );
+        if ( count == null )
+        {
+            count = new AtomicInteger();
+            map.put( key, count );
+        }
+        count.incrementAndGet();
+    }
+
+    private <K> String prettyPrintMapOrderByCount( Map<K, AtomicInteger> map )
+    {
+        List<Entry<K, AtomicInteger>> list = new ArrayList<>( map.entrySet() );
+        Collections.sort( list, new Comparator<Entry<K, AtomicInteger>>()
+        {
+            @Override
+            public int compare( Entry<K, AtomicInteger> o1, Entry<K, AtomicInteger> o2 )
+            {
+                return Integer.compare( o2.getValue().intValue(), o1.getValue().intValue() );
+            }
+        } );
+
+        StringBuilder builder = new StringBuilder( "{\n" );
+        for ( Entry<K, AtomicInteger> entry : list )
+        {
+            builder.append( "  \"" ).append( entry.getKey() ).append( "\"" )
+                    .append( " : " ).append( entry.getValue() ).append( "\n" );
+        }
+        return builder.append( "}" ).toString();
     }
 
     private static RepositorySystemSession optimizeSession( RepositorySystemSession session )

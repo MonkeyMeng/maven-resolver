@@ -203,4 +203,8 @@ public final class AndDependencySelector
         return hashCode;
     }
 
+    public Set<? extends DependencySelector> getSelectors()
+    {
+        return selectors;
+    }
 }

@@ -76,6 +76,11 @@ public final class ExclusionDependencySelector
         this.exclusions = exclusions;
     }
 
+    public Exclusion[] getExclusions()
+    {
+        return exclusions;
+    }
+
     public boolean selectDependency( Dependency dependency )
     {
         Artifact artifact = dependency.getArtifact();
@@ -188,6 +193,17 @@ public final class ExclusionDependencySelector
             hashCode = hash;
         }
         return hashCode;
+    }
+
+    @Override
+    public String toString()
+    {
+        StringBuilder builder = new StringBuilder( "ExclusionDependencySelector - [" );
+        for ( Exclusion exclusion : exclusions )
+        {
+            builder.append( exclusion ).append( ", " );
+        }
+        return builder.append( "]" ).toString();
     }
 
     private static class ExclusionComparator
